@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# Raw data (check the Kaggle license before committing it)
+dataset/
+
+# Generated artifacts (reproducible by running the scripts)
+data/processed/
+reports/figures/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
