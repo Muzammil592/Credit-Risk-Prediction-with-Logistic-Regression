@@ -29,14 +29,15 @@ import numpy as np
 
 
 def sigmoid(z: np.ndarray) -> np.ndarray:
-    """Numerically stable sigmoid (never calls exp on a large positive number)."""
+    """Numerically stable sigmoid: only ever exponentiates a non-positive number."""
     z = np.asarray(z, dtype=float)
-    out = np.empty_like(z)
-    pos = z >= 0
-    out[pos] = 1.0 / (1.0 + np.exp(-z[pos]))
-    ez = np.exp(z[~pos])
-    out[~pos] = ez / (1.0 + ez)
-    return out
+    e = np.exp(-np.abs(z))
+    return np.where(z >= 0, 1.0 / (1.0 + e), e / (1.0 + e))
+
+
+def log_loss_terms(z: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """Per-row  log(1 + exp(z)) - y*z, computed stably."""
+    return np.maximum(z, 0.0) + np.log1p(np.exp(-np.abs(z))) - y * z
 
 
 class LogisticRegressionScratch:
@@ -86,7 +87,7 @@ class LogisticRegressionScratch:
 
     def _objective(self, w, b, X, y, sw, lam):
         z = X @ w + b
-        loss = np.mean(sw * (np.logaddexp(0.0, z) - y * z))
+        loss = np.mean(sw * log_loss_terms(z, y))
         if self.penalty == "l2":
             loss += 0.5 * lam * np.dot(w, w)
         elif self.penalty == "l1":
@@ -97,8 +98,7 @@ class LogisticRegressionScratch:
         """Weighted log-loss (+ L2 term if used) and its gradients."""
         n = X.shape[0]
         z = X @ w + b
-        # log(1 + e^z) - y z, computed stably with logaddexp
-        loss = np.mean(sw * (np.logaddexp(0.0, z) - y * z))
+        loss = np.mean(sw * log_loss_terms(z, y))
         resid = sw * (sigmoid(z) - y)
         grad_w = X.T @ resid / n
         grad_b = resid.sum() / n
@@ -109,7 +109,8 @@ class LogisticRegressionScratch:
         return loss, grad_w, grad_b
 
     # --------------------------------------------------------------------- API
-    def fit(self, X, y, sample_weight=None):
+    def fit(self, X, y, sample_weight=None, init=None):
+        """`init=(coef, intercept)` optionally warm-starts the optimiser (used for bootstrapping)."""
         X = np.asarray(X, dtype=float)
         y = np.asarray(y, dtype=float)
         n, d = X.shape
@@ -117,7 +118,10 @@ class LogisticRegressionScratch:
         lam = self._reg_strength(n)
         lr = self.lr if self.lr is not None else self._auto_lr(X, sw, lam)
 
-        w, b = np.zeros(d), 0.0           # current iterate
+        if init is None:
+            w, b = np.zeros(d), 0.0       # current iterate
+        else:
+            w, b = np.array(init[0], dtype=float), float(init[1])
         yw, yb = w.copy(), b              # point where the gradient is evaluated
         t = 1.0                           # momentum bookkeeping (FISTA)
         prev_loss = np.inf
@@ -199,3 +203,4 @@ def gradient_check(X, y, penalty="l2", C=1.0, eps=1e-6, seed=0):
     numeric = np.append(num_gw, num_gb)
     rel_err = np.abs(analytic - numeric) / np.maximum(1e-12, np.abs(analytic) + np.abs(numeric))
     return float(rel_err.max())
+    

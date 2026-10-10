@@ -2,7 +2,7 @@
 
 Can we predict which loan applicants are likely to default, and can we explain *why* in a way a human (or a risk manager) would actually trust?
 
-That's the question behind this project. I'm building a credit default model from the ground up: cleaning the data, writing logistic regression **from scratch in NumPy**, checking it against scikit-learn, and handling the practical headaches that show up in real lending problems, like imbalanced classes and overlapping features.
+That's the question behind this project. I'm building a credit default model from the ground up: cleaning the data, writing logistic regression **from scratch in NumPy**, checking it against scikit-learn, and handling the practical headaches that show up in real lending problems, like imbalanced classes, overlapping features, and decisions that cost real money.
 
 I picked logistic regression on purpose. In credit risk it's still the industry standard because it's fast, stable, and, most importantly, **explainable**. A model that says "approve" or "decline" is only useful if someone can ask "why?" and get a real answer.
 
@@ -19,14 +19,14 @@ This project is still growing, so here's an honest snapshot.
 - Validation of my implementation against scikit-learn
 - Regularization tuning with cross-validation
 - A side-by-side comparison of ways to handle class imbalance
+- Probability calibration, so a predicted 20% really means about 20%
+- A decision threshold chosen by business cost instead of the default 0.5
+- Evaluation on the held-out test set, including a gradient boosting baseline for comparison
+- Plain-English interpretation of the model as odds ratios with confidence intervals
 
 **Coming next**
-- Full evaluation on the held-out test set (ROC-AUC, precision-recall, confusion matrix)
-- Choosing a decision threshold based on business cost instead of the default 0.5
-- Calibration checks, so a predicted 20% really means about 20%
-- Plain-English interpretation of the coefficients as odds ratios
-- A tree-based baseline, to see what extra complexity actually buys
 - A small Streamlit app where you can enter applicant details and get a default probability
+- Final write-up and cleanup
 
 I update this README as pieces get finished.
 
@@ -105,9 +105,20 @@ Instead of just calling a library, I wrote the model myself in NumPy so I unders
 
 - **Multicollinearity:** a VIF check shows which features overlap (interest rate and loan grade are the usual suspects)
 - **Regularization:** 5-fold cross-validation on the training set across a grid of `C` values for both L1 and L2. I pick the simplest model that's statistically as good as the best one (the "one standard error rule"), which favors stability over squeezing out the last fraction of a point
-- **Class imbalance:** defaults are the minority class, so I compare four approaches on the validation set: no adjustment, class weights, random oversampling, and random undersampling. Rebalancing tends to distort predicted probabilities, which is one reason a calibration check is on the to-do list
+- **Class imbalance:** defaults are the minority class, so I compare four approaches on the validation set: no adjustment, class weights, random oversampling, and random undersampling. Rebalancing tends to distort predicted probabilities, which is exactly why the next step exists
 
-The test set stays locked away until the final evaluation.
+### 4. Evaluation, calibration, and decisions
+
+A model that ranks applicants well isn't automatically a model you can make decisions with. This stage closes that gap.
+
+- **Calibration:** rebalancing the training data inflates predicted probabilities. I fix this with Platt scaling, a tiny logistic regression fitted on the validation set that stretches and shifts the scores without changing the ranking of applicants. I also compare it against isotonic regression and check reliability curves
+- **A baseline to beat:** a gradient boosting model trained on the same features, to see what extra complexity actually buys
+- **Credit-risk metrics:** ROC-AUC, Gini, KS, and PR-AUC for ranking quality, plus Brier score and log-loss for probability quality
+- **A threshold that reflects money, not habit:** instead of the default 0.5, I choose the cutoff that minimizes expected business cost, where approving a loan that defaults costs more than rejecting a good applicant. The threshold is picked on the validation set, then checked on the test set against simple policies like "approve everyone" and "use 0.5". A sensitivity table shows how the best threshold moves as the cost ratio changes
+- **Risk deciles:** applicants are grouped by predicted risk to confirm that higher predicted risk really does mean more defaults
+- **Odds ratios in plain English:** coefficients are converted into statements like "each extra percentage point of interest rate multiplies the odds of default by X", with 95% confidence intervals from bootstrapping. Features whose intervals include 1 are flagged as having no clear effect
+
+The test set is used once, only to report how earlier choices perform. It never influences them.
 
 ---
 
@@ -118,20 +129,23 @@ credit-risk-logistic-regression/
 ├── dataset/                      # Raw Kaggle CSV (not committed, see below)
 ├── data/
 │   └── processed/                # train.csv, val.csv, test.csv, cleaning_params.json
-├── models/                       # Saved model, preprocessor, and config
+├── models/                       # Saved model, preprocessor, calibrator, and settings
 ├── reports/
-│   ├── figures/                  # EDA and modeling charts
-│   └── *.csv                     # VIF, CV results, imbalance comparison, coefficients
+│   ├── figures/                  # EDA, modeling, and evaluation charts
+│   └── *.csv                     # VIF, CV results, imbalance comparison, test metrics,
+│                                 # threshold analysis, deciles, odds ratios
 ├── src/
 │   ├── data_cleaning.py          # Cleaning, EDA, feature engineering, split
 │   ├── preprocessing.py          # Scaling and encoding (fit on train only)
 │   ├── logreg_scratch.py         # Logistic regression from scratch in NumPy
-│   └── modeling.py               # Validation, tuning, imbalance comparison, saving
+│   ├── modeling.py               # Validation, tuning, imbalance comparison, saving
+│   ├── calibration.py            # Platt scaling for trustworthy probabilities
+│   └── evaluation.py             # Test metrics, threshold, deciles, odds ratios
 ├── requirements.txt
 └── README.md
 ```
 
-More scripts and the Streamlit app will land here as they're built.
+The Streamlit app will land here once it's built.
 
 ---
 
@@ -167,6 +181,12 @@ python src/modeling.py
 ```
 This runs the gradient check, compares my implementation with scikit-learn, tunes regularization, compares imbalance strategies, and saves the chosen model to `models/`. It takes a few minutes because the cross-validation fits the from-scratch model many times.
 
+**6. Evaluate and interpret**
+```bash
+python src/evaluation.py
+```
+This calibrates the probabilities, trains the gradient boosting baseline, scores everything on the test set, chooses the cost-based threshold, builds the decile table, and bootstraps the odds ratios. It takes a few minutes because of the bootstrapping.
+
 ---
 
 ## Decisions worth knowing about
@@ -176,6 +196,8 @@ A few deliberate choices, in case you're reading the code and wondering why:
 - **Anything learned from data is fit on train only.** Imputation values, scaling statistics, and category lists all come from the training split. Otherwise validation and test information leaks in.
 - **Exploration uses the training split only.** The test set stays untouched until the very end.
 - **Resampling touches training data only.** Over- and undersampling are never applied to validation or test.
+- **Calibration and the threshold are chosen on validation.** The test set only reports how those choices perform, so the final numbers aren't flattered by tuning.
+- **The cost ratio is an assumption.** The relative cost of a missed default versus a rejected good loan is illustrative, not taken from a real lender, which is why the project includes a sensitivity table rather than a single answer.
 - **Reproducibility.** Everything uses a fixed random seed (`42`), and the cleaning decisions are saved in `cleaning_params.json`.
 - **Simple over fancy.** When two settings perform about the same, I go with the simpler, more regularized one.
 
@@ -192,6 +214,8 @@ Python, NumPy, pandas, scikit-learn, matplotlib, seaborn, and Streamlit.
 - The dataset appears to be synthetic or simplified, so this shouldn't be read as performance on real lending data.
 - It has no time dimension, so I can't test how the model holds up as conditions change.
 - It covers only loans that were issued, so there's no information on applicants who were rejected. In real credit modeling this selection bias is a significant issue.
+- The business costs behind the decision threshold are assumptions. A real lender would plug in its own loss and profit figures.
+- Odds ratios hold other features constant, and several features overlap (interest rate and loan grade, loan amount and loan-to-income), so individual effects should be read together rather than in isolation.
 - A real deployment would also need fairness testing and regulatory review, which are beyond the scope of this project.
 
 ---
