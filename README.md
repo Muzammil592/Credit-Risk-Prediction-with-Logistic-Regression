@@ -2,15 +2,13 @@
 
 Can we predict which loan applicants are likely to default, and can we explain *why* in a way a human (or a risk manager) would actually trust?
 
-That's the question behind this project. I'm building a credit default model from the ground up: cleaning the data, writing logistic regression **from scratch in NumPy**, checking it against scikit-learn, and handling the practical headaches that show up in real lending problems, like imbalanced classes, overlapping features, and decisions that cost real money.
+That's the question behind this project. I built a credit default model from the ground up: cleaning the data, writing logistic regression **from scratch in NumPy**, checking it against scikit-learn, and handling the practical headaches that show up in real lending problems, like imbalanced classes, overlapping features, and decisions that cost real money. It ends with an interactive app where you can score an applicant and see what's driving the result.
 
 I picked logistic regression on purpose. In credit risk it's still the industry standard because it's fast, stable, and, most importantly, **explainable**. A model that says "approve" or "decline" is only useful if someone can ask "why?" and get a real answer.
 
 ---
 
 ## Where things stand
-
-This project is still growing, so here's an honest snapshot.
 
 **Done**
 - Data cleaning, exploration, and feature engineering
@@ -23,12 +21,34 @@ This project is still growing, so here's an honest snapshot.
 - A decision threshold chosen by business cost instead of the default 0.5
 - Evaluation on the held-out test set, including a gradient boosting baseline for comparison
 - Plain-English interpretation of the model as odds ratios with confidence intervals
+- An interactive Streamlit app that scores an applicant and explains the result
 
-**Coming next**
-- A small Streamlit app where you can enter applicant details and get a default probability
-- Final write-up and cleanup
+**Ideas for going further**
+- Deploying the app as a public live demo
+- Fairness checks across applicant groups
+- Time-based validation, if a dataset with dates becomes available
 
-I update this README as pieces get finished.
+---
+
+## The app
+
+The Streamlit app lets you describe an applicant and a loan, then shows:
+
+- **The estimated chance of default**, as a calibrated probability
+- **A decision** (approve, or refer for review) based on the cost-optimized cutoff
+- **Why this score?**, a chart of which factors pushed the risk up or down, in plain language
+- **A what-if chart** showing how the risk changes as the loan amount changes
+- **Guardrails:** impossible inputs (like employment longer than the applicant's adult life) are blocked, and unusual inputs trigger a warning that the model hasn't seen many people like this
+
+<!-- Add 2-3 screenshots here, for example:
+![Higher-risk applicant with explanation chart](docs/app_screenshot.png)
+-->
+
+<!-- If you deploy it, add the link here:
+**Live demo:** https://your-app-name.streamlit.app
+-->
+
+Run it yourself with `streamlit run app/app.py` (see [Getting started](#getting-started)).
 
 ---
 
@@ -120,12 +140,25 @@ A model that ranks applicants well isn't automatically a model you can make deci
 
 The test set is used once, only to report how earlier choices perform. It never influences them.
 
+### 5. Turning the model into an app
+
+Getting a model into an app has a few traps, so I handled them deliberately:
+
+- **No pickles in the app.** An export script writes the trained model, scaling statistics, calibration, and cutoff to a small JSON file. That file is safe to commit and doesn't depend on scikit-learn or on the training code, so the deployed app stays light.
+- **The app is proven to match the pipeline.** The export script scores the real test set two ways, through the training pipeline and through the app's code, starting from raw typed-in fields, and checks that the probabilities agree. If they don't, it warns before you deploy.
+- **The same cleaning rules apply.** Missing values are filled with the training medians, and impossible inputs are rejected, exactly as in the cleaning step.
+
 ---
 
 ## Project structure
 
 ```
 credit-risk-logistic-regression/
+├── app/
+│   ├── app.py                    # Streamlit app
+│   ├── scoring.py                # Scoring logic (numpy + pandas only)
+│   ├── model_artifacts.json      # Exported model, written by export_artifacts.py
+│   └── requirements.txt          # Light dependencies for deployment
 ├── dataset/                      # Raw Kaggle CSV (not committed, see below)
 ├── data/
 │   └── processed/                # train.csv, val.csv, test.csv, cleaning_params.json
@@ -140,12 +173,11 @@ credit-risk-logistic-regression/
 │   ├── logreg_scratch.py         # Logistic regression from scratch in NumPy
 │   ├── modeling.py               # Validation, tuning, imbalance comparison, saving
 │   ├── calibration.py            # Platt scaling for trustworthy probabilities
-│   └── evaluation.py             # Test metrics, threshold, deciles, odds ratios
+│   ├── evaluation.py             # Test metrics, threshold, deciles, odds ratios
+│   └── export_artifacts.py       # Exports the model for the app and verifies it
 ├── requirements.txt
 └── README.md
 ```
-
-The Streamlit app will land here once it's built.
 
 ---
 
@@ -187,6 +219,18 @@ python src/evaluation.py
 ```
 This calibrates the probabilities, trains the gradient boosting baseline, scores everything on the test set, chooses the cost-based threshold, builds the decile table, and bootstraps the odds ratios. It takes a few minutes because of the bootstrapping.
 
+**7. Export the model for the app**
+```bash
+python src/export_artifacts.py
+```
+This writes `app/model_artifacts.json` and checks that the app's scoring matches the training pipeline. You should see a PASS message at the end.
+
+**8. Launch the app**
+```bash
+streamlit run app/app.py
+```
+It opens in your browser at `http://localhost:8501`.
+
 ---
 
 ## Decisions worth knowing about
@@ -198,6 +242,7 @@ A few deliberate choices, in case you're reading the code and wondering why:
 - **Resampling touches training data only.** Over- and undersampling are never applied to validation or test.
 - **Calibration and the threshold are chosen on validation.** The test set only reports how those choices perform, so the final numbers aren't flattered by tuning.
 - **The cost ratio is an assumption.** The relative cost of a missed default versus a rejected good loan is illustrative, not taken from a real lender, which is why the project includes a sensitivity table rather than a single answer.
+- **The app runs on exported numbers, not pickles.** Pickled models can break between library versions, so the app reads a plain JSON file instead.
 - **Reproducibility.** Everything uses a fixed random seed (`42`), and the cleaning decisions are saved in `cleaning_params.json`.
 - **Simple over fancy.** When two settings perform about the same, I go with the simpler, more regularized one.
 
@@ -215,8 +260,8 @@ Python, NumPy, pandas, scikit-learn, matplotlib, seaborn, and Streamlit.
 - It has no time dimension, so I can't test how the model holds up as conditions change.
 - It covers only loans that were issued, so there's no information on applicants who were rejected. In real credit modeling this selection bias is a significant issue.
 - The business costs behind the decision threshold are assumptions. A real lender would plug in its own loss and profit figures.
-- Odds ratios hold other features constant, and several features overlap (interest rate and loan grade, loan amount and loan-to-income), so individual effects should be read together rather than in isolation.
-- A real deployment would also need fairness testing and regulatory review, which are beyond the scope of this project.
+- Odds ratios and the app's explanation chart hold other features constant, and several features overlap (interest rate and loan grade, loan amount and loan-to-income), so individual effects should be read together rather than in isolation.
+- The app is an educational demonstration. It has not been tested for fairness and is **not** meant for real lending decisions, which would also need regulatory review.
 
 ---
 
