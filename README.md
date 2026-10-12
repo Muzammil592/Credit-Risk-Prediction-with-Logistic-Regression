@@ -185,7 +185,7 @@ credit-risk-logistic-regression/
 
 **1. Clone the repo**
 ```bash
-git clone https://github.com/<your-username>/credit-risk-logistic-regression.git
+git clone https://github.com/Muzammil592/credit-risk-logistic-regression.git
 cd credit-risk-logistic-regression
 ```
 
